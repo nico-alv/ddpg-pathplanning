@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MF0 version="1.1" packageUris="http://schema.mathworks.com/mf0/faultinfo_datamodel/R2021a">
+  <faultinfo.FaultContainerSet type="faultinfo.FaultContainerSet" uuid="721ce92f-e70a-416a-972b-fb10cc4cbd35">
+    <conditionals type="faultinfo.conditional.Conditional" uuid="18a08f6f-d4de-442f-a083-da0f3d78e8cd">
+      <condition>x == true</condition>
+      <mustBeLogged>false</mustBeLogged>
+      <name>SampleConditional</name>
+      <resyncRefBlkID></resyncRefBlkID>
+      <resyncUUID>00000000-0000-0000-0000-000000000000</resyncUUID>
+      <symbols type="faultinfo.conditional.ExpressionSymbol" uuid="9f08fb7d-a1d7-4894-8bcd-af157bd92827">
+        <expression>true</expression>
+        <name>x</name>
+      </symbols>
+    </conditionals>
+    <isEnabled>false</isEnabled>
+    <lastUpdatedAt>2024-06-13T04:27:04</lastUpdatedAt>
+    <modelName>exampleHelperAvoidObstaclesMobileRobot</modelName>
+    <modelUUID>069b6c88-7a75-49ca-9519-53771266858c</modelUUID>
+  </faultinfo.FaultContainerSet>
+</MF0>
