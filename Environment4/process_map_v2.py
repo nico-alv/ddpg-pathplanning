@@ -12,6 +12,9 @@ image_array = np.array(image)
 threshold = 128
 binary_image = (image_array > threshold).astype(int)
 
+# Invertir los colores de la imagen binaria
+binary_image = 1 - binary_image
+
 # Mostrar la nueva imagen binaria
 plt.imshow(binary_image, cmap="gray")
 plt.title("Nueva Imagen de Obstáculos")
