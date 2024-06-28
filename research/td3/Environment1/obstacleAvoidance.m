@@ -1,184 +1,93 @@
+% Cargar el entorno desde un archivo guardado
 load Environment1 BW
 
+% Definir la matriz del mapa y escalar
 mapMatrix = BW;
 mapScale = 1;
 
-scanAngles = -3*pi/8:pi/12:3*pi/8; % Ángulos lidar
-maxRange = 70; % Alcance máximo
-lidarNoiseVariance = 0.1^2;
-lidarNoiseSeeds = randi(intmax, size(scanAngles));
+% Configuración del LIDAR
+scanAngles = linspace(-pi/4, pi/4, 10);  % 10 ángulos de escaneo
+maxRange = 10;  % Rango máximo en metros
+lidarNoise = 0.1;  % Ruido del sensor
 
-% Parámetros de velocidad máxima
-maxLinSpeed = 0.9; % Velocidad lineal
-maxAngSpeed = 0.9; % Velocidad angular
+% Parámetros de velocidad del robot
+maxLinSpeed = 0.5;  % Velocidad lineal máxima (m/s)
+maxAngSpeed = pi/4;  % Velocidad angular máxima (rad/s)
 
-%%%%route1environment1%%%%%
-initX = 34; % Punto de inicio x
-initY = 31; % Punto de inicio y
-%%%%%%%%%%%%%%
-initTheta = pi/2; % Ángulo inicial
+% Punto de inicio del robot
+initX = 10;  % Posición inicial X
+initY = 10;  % Posición inicial Y
+initTheta = 0;  % Orientación inicial
 
-fig = figure("Name", "BW");
-set(fig, "Visible", "on");
-ax = axes(fig);
+% Configurar el entorno de Simulink
+mdl = 'MobileRobotSimulation';  % Nombre del modelo de Simulink
+open_system(mdl);
 
-show(binaryOccupancyMap(mapMatrix), "Parent", ax);
-hold on
-plotTransforms([initX, initY, 0], eul2quat([initTheta, 0, 0]), "MeshFilePath", "groundvehicle.stl", "View", "2D");
-light;
-hold off
+% Configurar el bloque de agente en Simulink
+agentBlk = [mdl, '/RL Agent'];
 
-%% Modelo de Simulink y configuración del agente
-mdl = "exampleHelperAvoidObstaclesMobileRobot";
-Tfinal = 1000;
-sampleTime = 0.1;
+% Especificaciones del entorno
+obsInfo = rlNumericSpec([numel(scanAngles) 1], 'LowerLimit', 0, 'UpperLimit', maxRange);
+actInfo = rlNumericSpec([2 1], 'LowerLimit', [-maxLinSpeed; -maxAngSpeed], 'UpperLimit', [maxLinSpeed; maxAngSpeed]);
 
-agentBlk = mdl + "/Agent";
-open_system(mdl)
-open_system(mdl + "/Environment")
-
-obsInfo = rlNumericSpec([numel(scanAngles) 1], ...
-    "LowerLimit", zeros(numel(scanAngles), 1), ...
-    "UpperLimit", ones(numel(scanAngles), 1) * maxRange);
-numObservations = obsInfo.Dimension(1);
-
-numActions = 2;
-actInfo = rlNumericSpec([numActions 1], ...
-    "LowerLimit", -1, ...
-    "UpperLimit", 1);
-
+% Crear el entorno de Simulink
 env = rlSimulinkEnv(mdl, agentBlk, obsInfo, actInfo);
-env.ResetFcn = @(in) exampleHelperRLAvoidObstaclesResetFcn(in, scanAngles, maxRange, mapMatrix);
-env.UseFastRestart = "On";
+env.ResetFcn = @(in)localResetFcn(in);
 
-% Redes del Crítico y del Actor
+% Definir las capas de la red para el crítico
+criticLayerSizes = [400 300];
 statePath = [
-    featureInputLayer(numObservations, "Normalization", "none", "Name", "State")
-    fullyConnectedLayer(50, "Name", "CriticStateFC1")
-    reluLayer("Name", "CriticRelu1")
-    fullyConnectedLayer(25, "Name", "CriticStateFC2")];
+    featureInputLayer(numel(scanAngles), 'Normalization', 'none', 'Name', 'observation')
+    fullyConnectedLayer(criticLayerSizes(1), 'Name', 'CriticStateFC1')
+    reluLayer('Name', 'CriticRelu1')
+    fullyConnectedLayer(criticLayerSizes(2), 'Name', 'CriticStateFC2')
+    additionLayer(2, 'Name', 'add')
+    reluLayer('Name', 'CriticCommonRelu')
+    fullyConnectedLayer(1, 'Name', 'CriticOutput')];
+
 actionPath = [
-    featureInputLayer(numActions, "Normalization", "none", "Name", "Action")
-    fullyConnectedLayer(25, "Name", "CriticActionFC1")];
-commonPath = [
-    additionLayer(2, "Name", "add")
-    reluLayer("Name", "CriticCommonRelu")
-    fullyConnectedLayer(1, "Name", "CriticOutput")];
+    featureInputLayer(2, 'Normalization', 'none', 'Name', 'action')
+    fullyConnectedLayer(criticLayerSizes(2), 'Name', 'CriticActionFC1')];
 
-% Creación de dos redes críticas
-criticNetwork1 = layerGraph();
-criticNetwork1 = addLayers(criticNetwork1, statePath);
-criticNetwork1 = addLayers(criticNetwork1, actionPath);
-criticNetwork1 = addLayers(criticNetwork1, commonPath);
-criticNetwork1 = connectLayers(criticNetwork1, "CriticStateFC2", "add/in1");
-criticNetwork1 = connectLayers(criticNetwork1, "CriticActionFC1", "add/in2");
-criticNetwork1 = dlnetwork(criticNetwork1);
+% Conectar la entrada de acción a la segunda capa totalmente conectada
+criticNetwork = layerGraph(statePath);
+criticNetwork = addLayers(criticNetwork, actionPath);
+criticNetwork = connectLayers(criticNetwork, 'CriticActionFC1', 'add/in2');
 
-criticNetwork2 = layerGraph();
-criticNetwork2 = addLayers(criticNetwork2, statePath);
-criticNetwork2 = addLayers(criticNetwork2, actionPath);
-criticNetwork2 = addLayers(criticNetwork2, commonPath);
-criticNetwork2 = connectLayers(criticNetwork2, "CriticStateFC2", "add/in1");
-criticNetwork2 = connectLayers(criticNetwork2, "CriticActionFC1", "add/in2");
-criticNetwork2 = dlnetwork(criticNetwork2);
+% Crear y configurar los agentes TD3
+options = rlTD3AgentOptions(...
+    'SampleTime', 0.1, ...
+    'TargetSmoothFactor', 1e-3, ...
+    'ExperienceBufferLength', 1e6, ...
+    'MiniBatchSize', 64, ...
+    'DiscountFactor', 0.99, ...
+    'TargetUpdateFrequency', 4);
 
-% Configuración del Agente TD3
-agentOpts = rlTD3AgentOptions(...
-    "SampleTime", sampleTime, ...
-    "ActorOptimizerOptions", actorOptions, ...
-    "CriticOptimizerOptions", criticOptions, ...
-    "DiscountFactor", 0.995, ...
-    "MiniBatchSize", 128, ...
-    "ExperienceBufferLength", 1e6, ...
-    "TargetSmoothFactor", 0.005, ...
-    "TargetUpdateFrequency", 2, ...
-    "ExplorationModel", "OrnsteinUhlenbeck", ...
-    "Variance", 0.1, ...
-    "VarianceDecayRate", 1e-5);
+% Crear el actor y el crítico
+actorNetwork = [
+    featureInputLayer(numel(scanAngles), 'Normalization', 'none', 'Name', 'observation')
+    fullyConnectedLayer(300, 'Name', 'actorFC1')
+    reluLayer('Name', 'actorRelu1')
+    fullyConnectedLayer(200, 'Name', 'actorFC2')
+    reluLayer('Name', 'actorRelu2')
+    fullyConnectedLayer(2, 'Name', 'actorFC3')
+    tanhLayer('Name', 'ActionTanh')
+    scalingLayer('Name', 'ActorScaling', 'Scale', [maxLinSpeed; maxAngSpeed])];
+actorNetwork = dlnetwork(actorNetwork);
 
-% Creación del Agente TD3
-obstacleAvoidanceAgent = rlTD3Agent(actor, [critic1, critic2], agentOpts);
-open_system(mdl + "/Agent")
+critic1 = rlQValueFunction(criticNetwork, obsInfo, actInfo, 'Observation', {'observation'}, 'Action', {'action'});
+critic2 = rlQValueFunction(criticNetwork, obsInfo, actInfo, 'Observation', {'observation'}, 'Action', {'action'});
 
-%% Entrenamiento y simulación
-maxEpisodes = 1000;
-maxSteps = ceil(Tfinal / sampleTime);
+actor = rlContinuousDeterministicActor(actorNetwork, obsInfo, actInfo);
+agent = rlTD3Agent(actor, [critic1, critic2], options);
+
+% Configurar y correr el entrenamiento
 trainOpts = rlTrainingOptions(...
-    "MaxEpisodes", maxEpisodes, ...
-    "MaxStepsPerEpisode", maxSteps, ...
-    "ScoreAveragingWindowLength", 50, ...
-    "StopTrainingCriteria", "AverageReward", ...
-    "StopTrainingValue", 9999, ...
-    "Verbose", true, ...
-    "Plots", "training-progress");
+    'MaxEpisodes', 500, ...
+    'MaxStepsPerEpisode', 200, ...
+    'Verbose', true, ...
+    'Plots', 'training-progress', ...
+    'StopTrainingCriteria', 'AverageReward', ...
+    'StopTrainingValue', 200);
 
-doTraining = true; % Cambia esto a true para entrenar
-
-if doTraining
-    % Entrenar al agente
-    trainingStats = train(obstacleAvoidanceAgent, env, trainOpts);
-else
-    % Cargar un agente preentrenado
-    load exampleHelperAvoidObstaclesAgent obstacleAvoidanceAgent
-end
-
-set_param("exampleHelperAvoidObstaclesMobileRobot", "StopTime", "850");
-out = sim("exampleHelperAvoidObstaclesMobileRobot.slx");
-
-for i = 1:5:size(out.range, 3)
-   u = out.pose(i, :);
-   r = out.range(:, :, i);
-   exampleHelperAvoidObstaclesPosePlot(u, mapMatrix, mapScale, r, scanAngles, ax);
-end
-
-% Crear una figura
-figure;
-
-% Invertir los valores del mapa binario
-BW_inverted = imcomplement(BW);
-
-% Mostrar el mapa binario invertido como una imagen de fondo
-imshow(BW_inverted);
-hold on; % Mantener el gráfico actual para superponer la trayectoria
-
-% Definir los límites del gráfico usando las dimensiones de tu mapa 2D
-xLimits = [1 size(BW, 2)];
-yLimits = [1 size(BW, 1)];
-xlim(xLimits);
-ylim(yLimits);
-
-% Crear una matriz vacía para almacenar la trayectoria del robot
-trajectory = [];
-
-% Iterar a través de los datos de la trayectoria y trazar la trayectoria del robot
-for i = 1:5:size(out.range, 3)
-    u = out.pose(i, :);
-    % Ajustar las coordenadas del eje Y
-    u(2) = (-1) * (u(2) - 256);
-    trajectory = [trajectory; u];
-end
-
-% Trazar la trayectoria en el mapa 2D
-plot(trajectory(:, 1), trajectory(:, 2), 'r-', 'LineWidth', 2);
-
-% Etiquetas y título
-xlabel('Eje X');
-ylabel('Eje Y');
-title('Mapa Binario con Trayectoria del Robot');
-
-% Marcar el punto de inicio con color verde
-startPoint = trajectory(1, :);
-plot(startPoint(1), startPoint(2), 'go', 'MarkerSize', 10, 'MarkerFaceColor', 'g');
-
-% Marcar el punto de término con color rojo
-endPoint = trajectory(end, :);
-plot(endPoint(1), endPoint(2), 'ro', 'MarkerSize', 10, 'MarkerFaceColor', 'r');
-
-% Mostrar la leyenda
-legend('Trayectoria', 'Inicio', 'Término');
-
-% Habilitar la cuadrícula
-grid on;
-
-% Desactivar el modo de espera para permitir que la figura se muestre correctamente
-drawnow;
+trainingStats = train(agent, env, trainOpts);

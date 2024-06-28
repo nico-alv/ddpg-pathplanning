@@ -4,7 +4,7 @@ function range = exampleHelperAvoidObstaclesRangeSensor(pose, mapMatrix, maxRang
 persistent r
  if isempty(r)
 
-    r = rangeSensor('HorizontalAngle', [-3*pi/8,3*pi/8], 'HorizontalAngleResolution', pi/12, 'Range', [0 maxRange]);
+    r = rangeSensor('HorizontalAngle', [-3*pi/8,3*pi/8], 'HorizontalAngleResolution', pi/24, 'Range', [0 maxRange]);
 end
 map = binaryOccupancyMap(mapMatrix, mapScale);
 p = pose';

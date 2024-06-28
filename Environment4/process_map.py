@@ -4,7 +4,7 @@ import scipy.io
 import matplotlib.pyplot as plt
 # Cargar la nueva imagen
 image_path = 'imagen.png'
-image = Image.open(image_path).convert('L')  # Convertir a escala de grises
+image = Image.open(image_path).convert('RGB')  # Convertir a escala de grises
 image_array = np.array(image)
 
 # Convertir a matriz binaria (thresholding)
